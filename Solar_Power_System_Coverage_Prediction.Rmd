@@ -1,0 +1,342 @@
+---
+title: "Solar Power System Coverage Prediction"
+author: "Yash Pimpale"
+date: "26 April 2023"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, error = FALSE)
+```
+
+## DeepSolar database
+
+The data is a subset of the DeepSolar database, a solar installation database for the United States, built by extracting information from satellite images. Photovoltaic panel installations are identified from over one billion image tiles covering all urban areas as well as locations in the US by means of an advanced machine learning framework. Each image tile records the amount of solar panel systems (in terms of panel surface and number of solar panels) and is complemented with features describing social, economic, environmental, geographical, and meteorological aspects, which have been collected from readily available data sources (NASA Surface Meteorology and Solar Energy and the American Community Survey). As such, the database can be employed to relate key environmental, weather and socioeconomic factors with the adoption of solar photovoltaic energy production. More information about this database is at the link: http://web.stanford.edu/group/deepsolar/home
+
+The dataset data in the file data_hw3_deepsolar.RData contains a subset of the DeepSolar database. Each row of the
+dataset is a “tile” of interest, that is an area related to a detected solar power system. A solar power system consists of a set of solar panels on top of a building, or at a single location such as a solar farm, or a similar system to convert solar irradiance to energy. For each system, a collection of features record social, economic, housing, geographical, and meteorological aspects of the tile (area) in which the system has been detected. Information about these features are reported below.
+
+### Predict solar power system coverage
+
+The target variable is solar_system_coverage. This variable is a binary variable indicating the coverage of solar
+power systems in a given tile. The variable takes outcome low if the tile has a low-to-medium number of solar power systems, while it takes outcome high if the tile has a larger number of solar power systems (more than 10). Detection and estimation of the coverage level of a tile is an expensive process. In fact, labeling of the tiles in relation to their solar power system coverage involves processing and analysis of satellite image data, and implementation of complex and computationally intensive advanced machine learning methods. Researchers have interest in building a reliable and scalable classifier, which, using the available data on environmental, weather, and socioeconomic measurements, can predict the classification of new tiles associated with their solar power system coverage. Predictions from this “simpler” classifier could subsequently be used to aid the tile labeling process, making it less computationally expensive in some instances. The task is to build a supervised learning model to predict if a tile can be considered as containing low-to-medium or high solar power system coverage, using the available social, economic, housing, geographical, and meteorological features.
+
+We will implement at 3 different supervised learning methods to predict if a tile has high (high) solar power system coverage or not, on the basis of the input features. We will also employ an appropriate framework to compare and tune the different methods considered, evaluating and discussing their relative merits.  
+
+We will use below mentioned supervised learning methods to predict if a tile has high solar power system coverage or not, on the basis of the input features. We have derived optimal values of hyperparameters for each family of classifier by tuning them separately.  
+
+**Hyperparameters -->**  
+
+Tree complexity parameter (cp) - It is the minimum improvement needed at each node in the model. We have computed accuracy of the classification tree model at cp of 0.005, 0.01(default), 0.05, 0.1, 1 and found that the maximum accuracy is obtained at cp as 0.05 and 0.01.    
+    
+Number predictors for split (mtry) - It controls the number of input features a decision tree has available to consider at any given point in time. Range of values of mtry was taken as 2 to 14.
+
+Number of trees (ntree) - It refers to the number of decision trees that are grown in the forest. Increasing the number of trees can improve the accuracy of the random forest model. The number of trees needed depends on the number of rows in the data set. We computed accuracy of the Random forest model at different combinations of mtry and ntree. Range of ntree was taken as 100 to 1500. The maximum accuracy was obtained at (mtry = 2 & ntree = 500) and (mtry = 3 & ntree = 100).  
+
+Cost (C) - It is the regularization parameter used to controls the penalty of misclassification in SVM model. Values of C considered were 1, 2, 5, 10 and 20.  
+
+Sigma - It controls the level of non-linearity introduced in the SVM model. If the sigma value is very small, then the decision boundary is highly non-linear. Values of sigma considered were 0.03, 0.01, 0.1, 0.5 and 1. We computed accuracy of the SVM model at different combinations of Cost and Sigma. The maximum accuracy was obtained at Cost = 10 and Sigma = 0.1.  
+
+Degree - It is the degree of the polynomial used to find the hyperplane to split the data. Values of degree considered were 0, 1, 2, 3 and 4. We computed accuracy of the SVM model at different combinations of Cost and Degree. The maximum accuracy was obtained at Cost = 1 and Degree = 3.  
+
+**Below classifiers are taken into consideration -->**  
+
+1. Class_Tree_1 - Classification Tree with tree complexity parameter (cp) as 0.01  
+
+2. Class_Tree_2 - Classification Tree with tree complexity parameter (cp) as 0.05  
+
+3. Rand_For_1 - Random Forest with number of trees (ntree) as 500 and number predictors for split (mtry) as 2  
+
+4. Rand_For_2 - Random Forest with number of trees (ntree) as 100 and number predictors for split (mtry) as 3  
+
+5. SVM_1 - Support Vector Machine with kernel = rbfdot, cost (C) as 10 and sigma scaling coefficient as 0.1  
+
+6. SVM_2 - Support Vector Machine with kernel = polydot, cost (C) as 1 and polynomial degree as 3   
+
+    
+We will split data into training, validation and test sets. The test data will be set aside for evaluating the
+generalized predictive performance of the best classifier. 20% of the data will be used in testing. The remaining portion of the data will be used for model training and tuning. Since the range of predictor variables is different, we will standardize the data. Target variable "Solar System Coverage" is converted to factor where "high" = 1 and "low" = 0. We will use K-Fold cross validation procedure with 3 folds and 10 repetitions. The predictive performance of each model will be computed in each iteration and finally we will compare mean average values of Accuracy, Sensitivity, Specificity, Precision and Negative predictive value.
+
+```{r Compare models}
+
+  #Load required libraries
+  library(caret)
+  library(randomForest)
+  library(rpart)
+  library(rpart.plot)
+  library(kernlab)
+  library(pROC)
+  library(PRROC)
+  library(doParallel)
+  cl = makeCluster(4)
+  registerDoParallel(cl)
+  set.seed(22202250)
+  
+  #Load data
+  load("data_hw3_deepsolar.RData")
+  
+  #Split data into training and test sets with 80-20 split
+  n = nrow(data)
+  train = sample(1:n, n*0.80)
+  test = setdiff(1:n, train)
+  train_val_data = data[train,]
+  test_data = data[test,]
+  n_train = nrow(train_val_data)
+  
+  #Convert target variable to numeric
+  train_val_data$solar_system_coverage = ifelse(train_val_data$solar_system_coverage == 'high', 1, 0)
+  test_data$solar_system_coverage = ifelse(test_data$solar_system_coverage == 'high', 1, 0)
+  
+  #Standardize training and test data
+  train_val_data[, -1] = scale(train_val_data[,-1])
+  test_data[, -1] = scale(test_data[,-1])
+  
+  #Create list to identify the classifiers
+  classifiers = c("Class_Tree_1", "Class_Tree_2", "Rand_For_1", "Rand_For_2", "SVM_1", "SVM_2")
+  
+  #Function to compute performance metrics
+  class_metrics = function(y, yhat) {
+    
+    tab = table(y, yhat)
+    #Compute Accuracy
+    acc = sum(diag(tab))/sum(tab)
+    #Compute Sensitivity
+    sen = tab[2,2]/sum(tab[2,])
+    #Compute Specificity
+    spec = tab[1,1]/sum(tab[1,])
+    #Compute Precision
+    prec = tab[2,2] / (tab[1,2] + tab[2,2])
+    #Compute Negative predictive value
+    npv = tab[1,1] / (tab[1,1] + tab[2,1])
+    
+    return(c(acc, sen, spec, prec, npv))
+  }
+  
+  #Tuning and comparison of models
+  
+  #Set number of folds
+  K = 3 
+  #Set number of replicates
+  R = 10 
+  #Set number of classifiers
+  C = 6
+  
+  #Initialize vectors and matrix's to store class metrics of the classifiers in the K folds
+  out_acc = vector("list", R)
+  out_sens = vector("list", R)
+  out_spec = vector("list", R)
+  out_prec = vector("list", R)
+  out_npv = vector("list", R)
+  
+  acc = matrix(NA, K, C)
+  sens = matrix(NA, K, C)
+  spec = matrix(NA, K, C)
+  prec = matrix(NA, K, C)
+  npv = matrix(NA, K, C)
+  
+  #Replicate procedure for R number of times
+  for (r in 1:R) {
+    
+    folds = rep(1:K, ceiling(n_train/K))
+    folds = sample(folds)
+    #Get n_train data points
+    folds = folds[1:n_train] 
+    
+    #Implement K-folds cross validation
+    for (k in 1:K) {
+      
+      #Split data into training and validation sets
+      train_fold = which(folds != k)
+      val = setdiff(1:n_train, train_fold)
+      val_data = train_val_data[val,]
+      train_data = train_val_data[train_fold,]
+      
+      #Fit classifiers on the training data
+      
+      #Classification tree
+      fit_ct1 = rpart(solar_system_coverage ~ ., data = train_data, method = "class", control = list(cp = 0.01))
+      
+      fit_ct2 = rpart(solar_system_coverage ~ ., data = train_data, method = "class", control = list(cp = 0.05))
+      
+      #Random forest
+      fit_rf1 = randomForest(solar_system_coverage ~ ., data = train_data, importance = TRUE, ntree = 500, mtry = 2)
+      
+      fit_rf2 = randomForest(solar_system_coverage ~ ., data = train_data, importance = TRUE, ntree = 100, mtry = 3)
+      
+      #Supper Vector Machine 
+      y = factor(train_data$solar_system_coverage)
+      x = as.matrix(train_data[,-1])
+      
+      fit_svm1 = ksvm(x, y, type = "C-svc", kernel = "rbfdot", C = 10, kpar = list(sigma = 0.1))
+      
+      fit_svm2 = ksvm(x, y, type = "C-svc", kernel = "polydot", C = 1, kpar = list(degree = 3))
+      
+      
+      #Predict the classification of the validation data and compute predictive performance metrics
+      
+      y_pred_ct1 = predict(fit_ct1, newdata = val_data, type = "class")
+      metrics_ct1 = class_metrics(val_data$solar_system_coverage, y_pred_ct1)
+      acc[k,1] = metrics_ct1[1] 
+      sens[k,1] = metrics_ct1[2]
+      spec[k,1] = metrics_ct1[3]
+      prec[k,1] = metrics_ct1[4]
+      npv[k,1] = metrics_ct1[5]
+      
+      y_pred_ct2 = predict(fit_ct2, newdata = val_data, type = "class")
+      metrics_ct2 = class_metrics(val_data$solar_system_coverage, y_pred_ct2)
+      acc[k,2] = metrics_ct2[1] 
+      sens[k,2] = metrics_ct2[2]
+      spec[k,2] = metrics_ct2[3]
+      prec[k,2] = metrics_ct2[4]
+      npv[k,2] = metrics_ct2[5]
+      
+      prob_rf1 = predict(fit_rf1, newdata = val_data, type = "class")
+      #Classify observation 0 or 1 based on probability with threshold as 0.5
+      y_pred_rf1 = ifelse(prob_rf1 > 0.5, 1, 0)
+      metrics_rf1 = class_metrics(val_data$solar_system_coverage, y_pred_rf1)
+      acc[k,3] = metrics_rf1[1] 
+      sens[k,3] = metrics_rf1[2]
+      spec[k,3] = metrics_rf1[3]
+      prec[k,3] = metrics_rf1[4]
+      npv[k,3] = metrics_rf1[5]
+      
+      prob_rf2 = predict(fit_rf2, newdata = val_data, type = "class")
+      #Classify observation 0 or 1 based on probability with threshold as 0.5
+      y_pred_rf2 = ifelse(prob_rf2 > 0.5, 1, 0)
+      metrics_rf2 = class_metrics(val_data$solar_system_coverage, y_pred_rf2)
+      acc[k,4] = metrics_rf2[1] 
+      sens[k,4] = metrics_rf2[2]
+      spec[k,4] = metrics_rf2[3]
+      prec[k,4] = metrics_rf2[4]
+      npv[k,4] = metrics_rf2[5]
+      
+      newx = as.matrix(val_data[,-1])
+      y_pred_svm1 = predict(fit_svm1, newdata = newx)
+      metrics_svm1 = class_metrics(val_data$solar_system_coverage, y_pred_svm1)
+      acc[k,5] = metrics_svm1[1] 
+      sens[k,5] = metrics_svm1[2]
+      spec[k,5] = metrics_svm1[3]
+      prec[k,5] = metrics_svm1[4]
+      npv[k,5] = metrics_svm1[5]
+      
+      y_pred_svm2 = predict(fit_svm2, newdata = newx)
+      metrics_svm2 = class_metrics(val_data$solar_system_coverage, y_pred_svm2)
+      acc[k,6] = metrics_svm2[1] 
+      sens[k,6] = metrics_svm2[2]
+      spec[k,6] = metrics_svm2[3]
+      prec[k,6] = metrics_svm2[4]
+      npv[k,6] = metrics_svm2[5]
+      
+    }
+    
+    out_acc[[r]] = acc
+    out_sens[[r]] = sens
+    out_spec[[r]] = spec
+    out_prec[[r]] = prec
+    out_npv[[r]] = npv
+    
+  }
+  
+  #Calculate average of all the metrics
+  avg_acc = t(sapply(out_acc, colMeans))
+  avg_sens = t(sapply(out_sens, colMeans))
+  avg_spec = t(sapply(out_spec, colMeans))
+  avg_prec = t(sapply(out_prec, colMeans))
+  avg_npv = t(sapply(out_npv, colMeans))
+  
+  #Calculate mean average of all the metrics
+  mean_acc = colMeans(avg_acc)
+  mean_sens = colMeans(avg_sens)
+  mean_spec = colMeans(avg_spec)
+  mean_prec = colMeans(avg_prec)
+  mean_npv = colMeans(avg_npv)
+  
+  #Calculate F1 score
+  F1 = 2 * mean_prec * mean_sens / (mean_prec + mean_sens)
+
+  #Store metrics data in a dataframe
+  metrics_df = data.frame(Accuracy = mean_acc, Sensitivity = mean_sens, Specificity = mean_spec, 
+                          Precision = mean_prec, Negative_Predictive_Value = mean_npv, F1_score = F1)
+  #Provide row names
+  rownames(metrics_df) = classifiers
+  
+  #Display metrics of each model
+  print(metrics_df)
+
+```
+
+Note: The values for predictive performance metrics may change for every knit. Hence please ignore the exact percentages written below.
+
+From the above results, the model with the highest mean average classification accuracy (94.73%) is Random Forest with number of trees as 100 and number predictors for split equal to 3. Followed by Rand_For_1 (94.71%) and SVM_1 (94.47%) respectively. Class_Tree_2 (92.13%) has the lowest classification accuracy. Overall all model have very high accuracy meaning they are excellent classifiers for detecting if a tile has high solar power system coverage or not.  
+
+The mean average sensitivity of SVM_2 model is the highest (61.90%), followed by SVM_1 (58.18%) and Rand_For_2 (54.75%) respectively. Overall all the model (except Class_Tree_2) have decent sensitivity meaning they are decent at detecting tile with high solar power system coverage as high coverage tile correctly.  
+
+Classifier Rand_For_1 has the maximum specificity of 99.28% where as SVM_2 has the lowest specificity of 96.64% (as compared to other classifier). Overall all the classifiers have excellent specificity meaning they are excellent at detecting a tile with low solar power system coverage as a low coverage tile correctly.  
+
+For our analysis, precision is defined as the ability of a classifier to detect actual tile with high solar power system coverage as high coverage tile correctly. Rand_For_1 (88.91%) has the highest precision, followed by Rand_For_2 (87.02%), SVM_1 (80.41%), Class_Tree_1 (77.40%), Class_Tree_2 (76.77%) and SVM_2 (66.88%).
+
+Negative predictive value is defined as the ability of a classifier to detect actual tile with low solar power system coverage as low coverage tile correctly. SVM_2 (95.86%) has the highest Negative predictive value, followed by SVM_1 (95.56%), Rand_For_2 (95.24%), Rand_For_1 (95.07%), Class_Tree_1 (94.54%) and Class_Tree_2 (92.27%). Overall all the classifiers have very high Negative predictive value.  
+
+The F1 score can be interpreted as a classifiers balanced ability to identify tiles with high solar power coverage and avoiding false positives. F1 score of SVM_1 (67.51) is very slightly higher than Rand_For_2 (67.21%) meaning they are good at detecting tiles with high solar power coverage. Class_Tree_2 (42.80%) has the lowest F1 score.
+
+### Best Model Selection
+
+A good classification model for detecting tiles with high solar power coverage should have high F1 score, Precision and NPV values, indicating that it is accurate, precise and reliable in its predictions.
+
+Based on the above results, we can say that since the Rand_For_2 i.e. Random Forest with number of trees as 100 and number predictors for split equal to 3 is better at detecting tiles with high solar power coverage compared to other classifiers. Although F1 score and NPV of SVM_1 i.e. Support Vector Machine (kernel = rbfdot, cost = 10, sigma = 0.1) is very slightly higher, it's precision is quite lower than the Rand_For_2 and since our focus is to detect high coverage tiles, precision has more weightage than NPV. Hence we will consider Rand_For_2 as the best model.
+
+### Training on Test Data
+
+Now we will train Random Forest model with number of trees as 100 and number predictors for split equal to 3 using training data and predict test data.
+
+```{r Predict test data}
+  
+  #Predict testing data using Random Forest 2 since it has maximum mean average accuracy
+  
+  fit_rf3 = randomForest(solar_system_coverage ~ ., data = train_val_data, importance = TRUE,
+                         ntree = 100, mtry = 3)
+  prob_rf3 = predict(fit_rf3, newdata = test_data, type = "class")
+  y_pred_rf3 = ifelse(prob_rf3 > 0.5, 1, 0)
+  metrics = class_metrics(test_data$solar_system_coverage, y_pred_rf3)
+  
+  f1 = 2 * metrics[4] * metrics[2] / (metrics[4] + metrics[2])
+  
+  #Display Confusion Martix
+  table(test_data$solar_system_coverage, y_pred_rf3)
+  
+  #Display classification metrics
+  metrics_df1 = data.frame(Accuracy = metrics[1], Sensitivity = metrics[2], Specificity = metrics[3], Precision = metrics[4], Negative_Predictive_Value = metrics[5], F1_score = f1)
+  print(metrics_df1)
+  
+```  
+
+The accuracy of Random forest with ntree = 100 and mtry = 3 on testing data is 92.40%. The negative predictive value 92.30% is slightly lower than the positive predictive value (precision) of 95.65% that means the classifier is very good at detecting actual tile with low solar power system coverage as tile with low coverage correctly and excellent at detecting actual tile with high solar power system coverage as high coverage tile correctly.    
+
+The sensitivity of the classifier is 28.82% whereas the specificity of the classifier is 99.84% meaning it is excellent at detecting a tile with low solar power system coverage as a low coverage tile.  
+
+Also the f1 score is 44.29% meaning overall performance of the classifier is just moderate.  
+
+
+An receiver operating characteristic curve (ROC-Curve) is a graph that displays the performance of binary classifier at various thresholds. It tells how much the model is capable of distinguishing between classes. The ROC curve is created by plotting sensitivity (true positive rate (TPR)) against specificity (false positive rate (FPR)).
+
+```{r, fig.height = 6, fig.width = 10, fig.align='center'}
+
+  #Plot ROC Curve
+  roc_rf3 = roc(test_data$solar_system_coverage, y_pred_rf3)
+  plot(roc_rf3, main = "ROC Curve - Classification Tree")
+
+```    
+
+Ideally, classifier that has curve closer to the top-left corner indicate a better performance. As per the above graph, ROC curve for our best classifier looks slightly tilted towards the top-left corner meaning it is decent at classifying tile as high/low solar power system coverage.  
+ 
+The precision/recall – PR curve plots precision versus recall as a function of classification threshold T = 0.5.
+
+```{r, fig.height = 6, fig.width = 10, fig.align='center'}
+
+  #Plot PR Curve
+  pr_rf3 = pr.curve(test_data$solar_system_coverage, y_pred_rf3, curve = TRUE)
+  plot(pr_rf3, main = "PR Curve - Logistic Regression")
+
+```
+
+The larger the area under the curve (AUC-PR) the better is the ability of the classifier at identifying correctly the positive class. Since AUC-PR value of our model is 0.5612, we can say that the classifier is returning accurate results (high precision) moderately.
